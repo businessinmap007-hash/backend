@@ -64,12 +64,16 @@ class Kernel extends HttpKernel
         'signed' => \App\Http\Middleware\ValidateSignature::class,
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
-
         'bindings' => \Illuminate\Routing\Middleware\SubstituteBindings::class,
         'admin' => \App\Http\Middleware\AdminAuthenticationMiddleware::class,
         'authUser' => \App\Http\Middleware\CheckUserIsLoggedIn::class,
         'institution' => \App\Http\Middleware\InstitutionAuthenticationMiddleware::class,
         'locale' => \App\Http\Middleware\changeLanguageForApi::class,
         'localeControlPanel' => \App\Http\Middleware\changeLanguageForControlPanel::class,
+        'business' => \App\Http\Middleware\BusinessOnly::class,
+        'check.pin' => \App\Http\Middleware\CheckWalletPin::class,
+        
+
+
     ];
 }

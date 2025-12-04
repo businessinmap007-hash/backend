@@ -1,3 +1,7 @@
+
+
+
+
 <?php
 
 
@@ -166,21 +170,32 @@ Auth::routes();
 
 Route::prefix('administrator')->middleware(['auth:admin'])->group(function () {
 
-    // ========== MENU ITEMS ==========
-    Route::resource('menu-items', \App\Http\Controllers\Admin\MenuItemController::class);
 
-    // ========== MENU SIZES ==========
-    Route::resource('menu-sizes', \App\Http\Controllers\Admin\MenuItemSizeController::class);
 
-    // ========== MENU EXTRAS ==========
-    Route::resource('menu-extras', \App\Http\Controllers\Admin\MenuItemExtraController::class);
+    Route::get('/', [App\Http\Controllers\Admin\DashboardController::class, 'index'])
+        ->name('admin.dashboard');
 
-    // ========== MENU ORDERS ==========
-    Route::resource('menu-orders', \App\Http\Controllers\Admin\MenuOrderController::class);
+    // MENU
+    Route::resource('menu-items', App\Http\Controllers\Admin\MenuItemController::class);
+    Route::resource('menu-categories', App\Http\Controllers\Admin\MenuCategoryController::class);
+    Route::resource('menu-extras', App\Http\Controllers\Admin\MenuItemExtraController::class);
+    Route::resource('menu-sizes', App\Http\Controllers\Admin\MenuItemSizeController::class);
 
-    // ========== CART (عرض فقط) ==========
-    Route::resource('user-carts', \App\Http\Controllers\Admin\CartController::class)->only(['index', 'show']);
+    // ORDERS
+    Route::get('/orders', [App\Http\Controllers\Admin\OrderController::class, 'index'])
+        ->name('admin.orders.index');
+    Route::get('/orders/{id}', [App\Http\Controllers\Admin\OrderController::class, 'show'])
+        ->name('admin.orders.show');
+    Route::post('/orders/{id}/status', [App\Http\Controllers\Admin\OrderController::class, 'updateStatus'])
+        ->name('admin.orders.status');
+
+    // BUSINESSES
+    Route::resource('businesses', App\Http\Controllers\Admin\BusinessController::class);
+
+    // BRANCHES
+    Route::resource('branches', App\Http\Controllers\Admin\BranchController::class);
 });
+
 
 
 

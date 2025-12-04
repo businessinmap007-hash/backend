@@ -1,33 +1,29 @@
 <?php
 
-namespace App\Http\Resources\Api\Transaction;
+namespace App\Http\Resources;
 
-use App\Http\Resources\UserBasicResource;
-use App\Models\User;
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class TransactionResource extends JsonResource
 {
-    /**
-     * Transform the resource into an array.
-     *
-     * @param \Illuminate\Http\Request $request
-     * @return array
-     */
-    public function toArray($request)
+    public function toArray(Request $request): array
     {
         return [
-            'id' => $this->id,
-            'status' => 'deposit',
+            'id' => (int)$this->id,
+            'status' => $this->status,
+            'price' => number_format($this->price, 2, '.', ''),
             'operation' => $this->operation,
-            'price' => $this->price,
-            'user' => UserBasicResource::make($this->user),
-            $this->mergeWhen($this->target_id != null, [
-                'targetUser' => UserBasicResource::make(User::whereId($this->target_id)->first()),
-            ]),
+            'notes' => $this->notes ?? '',
+            'target_id' => $this->target_id,
             'created_at' => $this->created_at->format('Y-m-d H:i:s'),
-            'notes' => $this->notes
-
+            'target_user' => $this->whenLoaded('targetUser', function () {
+                return [
+                    'id' => $this->targetUser->id,
+                    'name' => $this->targetUser->name,
+                    'phone' => $this->targetUser->phone,
+                ];
+            }),
         ];
     }
 }

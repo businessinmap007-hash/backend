@@ -2,240 +2,215 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Models\Category;
-use App\Http\Resources\UserResource;
-use App\Models\User;
-use Carbon\Carbon;
-use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
-use Validator;
-use Auth;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Validator;
+use App\Models\User;
 use App\Models\Device;
+use App\Http\Resources\UserResource;
 use App\Http\Helpers\Main;
-use Illuminate\Support\Facades\App;
-
 
 class LoginController extends Controller
 {
-
-    public $main;
+    protected $main;
 
     public function __construct(Main $main, Request $request)
     {
-
-        $language = $request->headers->get('lang') ? $request->headers->get('lang') : 'ar';
-        app()->setLocale($language);
-        if (!$request->headers->get('lang')) {
-            app()->setLocale($request->lang);
-        }
+        // تحديد اللغة من الـ headers أو الطلب
+        $lang = $request->header('lang', $request->get('lang', 'ar'));
+        app()->setLocale($lang);
         $this->main = $main;
-
     }
-
-
-    public function update_device_token(Request $request)
-    {
-        $api_token = str_replace('Bearer ', '', request()->headers->get('Authorization'));
-        $user = User::whereApiToken($api_token)->first();
-
-        $devices = Device::pluck('device')->toArray();
-        $data = in_array($request->deviceToken, $devices);
-
-
-        if ($data) {
-            $device = Device::where('user_id', $user->id)->where('device_type', $request->deviceType)->first();
-            $device->device = $request->deviceToken;
-            $device->save();
-        } else {
-            $device = new Device();
-            $device->user_id = $user->id;
-            $device->device = $request->deviceToken;
-            $device->device_type = $request->deviceType ? $request->deviceType : "";
-            $device->save();
-        }
-
-        return response()->json([
-            'status' => 200,
-            'message' => "Device token updated successfully",
-        ]);
-
-    }
-
 
     /**
-     * @param Request $request
-     * @return \Illuminate\Http\JsonResponse
+     * تسجيل الدخول وإصدار توكن Sanctum
      */
     public function login(Request $request)
     {
-
         $validator = Validator::make($request->all(), [
-            'email' => 'required',
-            'password' => 'required',
+            'email'    => 'required|string',
+            'password' => 'required|string',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(
-                [
-                    'status' => 402,
-                    'errors' => $validator->errors()->all(),
-                    'message' => 'Something went wrong!',
-                ]
-            );
+            return response()->json([
+                'status'  => 422,
+                'message' => 'Validation failed',
+                'errors'  => $validator->errors(),
+            ], 422);
         }
 
-
-
-
-        if ($user = Auth::attempt(['email' => $request->email, 'password' => $request->password])) {
-            if (!auth()->user()->api_token) {
-                auth()->user()->api_token = strtolower(str_random(120));
-                auth()->user()->save();
-            }
-
-
-            $this->manageDevices($request, auth()->user());
-
+        // محاولة تسجيل الدخول
+        if (!Auth::attempt(['email' => $request->email, 'password' => $request->password])) {
             return response()->json([
-                'status' => 200,
-                'message' => 'success',
-                'data' =>  UserResource::make(auth()->user()),
-                'api_token' => auth()->user()->api_token
-            ]);
+                'status'  => 401,
+                'message' => 'Email or password incorrect.',
+            ], 401);
+        }
+
+        /** @var \App\Models\User $user */
+        $user = Auth::user();
+
+        // حذف التوكنات القديمة لتجنب التراكم (اختياري)
+        $user->tokens()->delete();
+
+        // إنشاء access token جديد عبر Sanctum
+        $token = $user->createToken('api_token')->plainTextToken;
+
+        // إدارة الأجهزة
+        $this->updateDevice($request, $user);
+
+        return response()->json([
+            'status'  => 200,
+            'message' => 'Login successful',
+            'data'    => new UserResource($user),
+            'token'   => $token,
+        ]);
+    }
+
+    /**
+     * تحديث أو إضافة Device Token
+     */
+    protected function updateDevice(Request $request, User $user)
+    {
+        if (!$request->deviceToken) return;
+
+        $device = Device::where('device', $request->deviceToken)->first();
+
+        if ($device) {
+            $device->user_id = $user->id;
+            $device->device_type = $request->deviceType ?? $device->device_type;
+            $device->save();
         } else {
-            return response()->json([
-                'status' => 400,
-                'message' => "email or password incorrect.",
-            ], 400);
+            Device::create([
+                'user_id'     => $user->id,
+                'device'      => $request->deviceToken,
+                'device_type' => $request->deviceType ?? '',
+            ]);
         }
     }
 
-
-    public function postActivationCode(Request $request)
+    /**
+     * تحديث device token (مستقلة)
+     */
+    public function update_device_token(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'phone' => 'required',
-            'activation_code' => 'required',
+            'deviceToken' => 'required|string',
+            'deviceType'  => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(
-                [
-                    'status' => 400,
-                    'errors' => $validator->errors()->all(),
-                    'message' => trans('global.some_errors_happen'),
-                ]
-            );
+            return response()->json([
+                'status' => 422,
+                'errors' => $validator->errors(),
+            ], 422);
         }
 
+        $user = $request->user(); // من Sanctum token
 
-        $user = User::where([
-            'phone' => $request->phone,
-        ])
-            ->first();
-
-        if ($user->action_code != $request->activation_code) {
+        if (!$user) {
             return response()->json([
-                'status' => 400,
-                'message' => 'Please check activation code',
-            ]);
+                'status' => 401,
+                'message' => 'Unauthorized',
+            ], 401);
         }
 
-        if ($user && $user->is_active == 0 && $user->action_code == $request->activation_code) {
-            $user->is_active = 1;
-            $user->save();
+        $this->updateDevice($request, $user);
+
+        return response()->json([
+            'status'  => 200,
+            'message' => 'Device token updated successfully',
+        ]);
+    }
+
+    /**
+     * تفعيل الحساب برمز التفعيل
+     */
+    public function postActivationCode(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'phone'           => 'required|string',
+            'activation_code' => 'required|string',
+        ]);
+
+        if ($validator->fails()) {
             return response()->json([
-                'status' => 200,
-                'message' => __('global.your_account_was_activated'),
-                'data' => $user
-            ]);
-        } elseif ($user && $user->is_active == 1) {
+                'status'  => 422,
+                'message' => 'Validation failed',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        $user = User::where('phone', $request->phone)->first();
+
+        if (!$user) {
             return response()->json([
-                'status' => 200,
-                'message' => __('global.your_account_was_activated_before'),
-                'data' => $user
-            ]);
-        } else {
+                'status'  => 404,
+                'message' => __('global.account_not_found'),
+            ], 404);
+        }
+
+        if ($user->action_code !== $request->activation_code) {
             return response()->json([
-                'status' => 400,
+                'status'  => 400,
                 'message' => __('global.activation_code_not_correct'),
             ]);
         }
 
+        if (!$user->is_active) {
+            $user->is_active = 1;
+            $user->save();
 
-    }
-
-
-    /**
-     * @param Request $request
-     * @return \Illuminate\Http\JsonResponse
-     *
-     * @@ Resend Activation Code.
-     */
-
-    public function resendActivationCode(Request $request)
-    {
-
-
-        $validator = Validator::make($request->all(), [
-            'phone' => 'required',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json(
-                [
-                    'status' => 400,
-                    'errors' => $validator->errors()->all(),
-                    'message' => trans('global.some_errors_happen'),
-                ]
-            );
-        }
-
-
-        $user = User::wherePhone($request->phone)->first();
-
-        if (isset($user)) {
-            $code = rand(1000, 9999);
-            $activation_code = $user->actionCode($code);
-            $user->action_code = $activation_code;
-            if ($user->save()) {
-
-                return response()->json([
-                    'status' => 200,
-                    'message' => __('global.activation_code_sent'),
-                    'code' => $user->action_code
-                ]);
-            }
-        } else {
             return response()->json([
-                'status' => 400,
-                'message' => __('global.account_not_found'),
+                'status'  => 200,
+                'message' => __('global.your_account_was_activated'),
+                'data'    => new UserResource($user),
             ]);
         }
 
-
+        return response()->json([
+            'status'  => 200,
+            'message' => __('global.your_account_was_activated_before'),
+            'data'    => new UserResource($user),
+        ]);
     }
 
     /**
-     * @param $request
-     * @@ User Device Management
+     * إعادة إرسال رمز التفعيل
      */
-    private function manageDevices($request, $user = null)
+    public function resendActivationCode(Request $request)
     {
-        if ($request->deviceToken) {
-            $devices = Device::pluck('device')->toArray();
-            $data = in_array($request->deviceToken, $devices);
-            if ($data) {
-                $data = Device::where('device', $request->deviceToken)->first();
-                $data->user_id = $user->id;
-                $data->save();
-            } else {
-                $data = new Device;
-                $data->device = $request->deviceToken;
-                $data->user_id = $user->id;
-                $data->device_type = $request->deviceType ? $request->deviceType : "";
-                $data->save();
-            }
+        $validator = Validator::make($request->all(), [
+            'phone' => 'required|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status'  => 422,
+                'errors'  => $validator->errors(),
+            ], 422);
         }
+
+        $user = User::where('phone', $request->phone)->first();
+
+        if (!$user) {
+            return response()->json([
+                'status'  => 404,
+                'message' => __('global.account_not_found'),
+            ], 404);
+        }
+
+        $code = rand(1000, 9999);
+        $user->action_code = $user->actionCode($code);
+        $user->save();
+
+        // هنا يمكنك إرسال SMS فعلي
+        return response()->json([
+            'status'  => 200,
+            'message' => __('global.activation_code_sent'),
+            'code'    => $user->action_code, // يمكن حذفها في الإنتاج
+        ]);
     }
 }
