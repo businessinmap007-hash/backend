@@ -137,8 +137,19 @@ class NotificationsController extends Controller
     public function delete(Request $request)
     {
 
-        // عملية الحذف تم نقلها إلى `NotificationActionsController`
-        // هذا الكنترول مخصّص لاسترجاع وعرض الإشعارات فقط
-        // إن احتجت استدعاء حذف من نفس المسار، استعمل NotificationActionsController@delete
+        $user = User::whereApiToken($request->api_token)->first();
+        
+        $is_deleted = $user->notifications()->where('id', $request->notifyId)->delete();
+
+        if ($is_deleted) {
+            return response()->json([
+                'status' => true,
+                'count' => $user->unreadNotifications->count()
+            ]);
+        } else {
+            return response()->json([
+                'status' => false,
+            ]);
+        }
     }
 }
