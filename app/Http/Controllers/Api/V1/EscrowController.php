@@ -3,17 +3,14 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\Escrow\CreateEscrowRequest;
-use App\Http\Requests\Escrow\CancelEscrowRequest;
-use App\Models\Escrow;
-use App\Models\User;
 use App\Services\EscrowService;
+use App\Models\Escrow;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
 class EscrowController extends Controller
 {
-    protected EscrowService $escrow;
+    protected $escrow;
 
     public function __construct(EscrowService $escrow)
     {
@@ -21,17 +18,21 @@ class EscrowController extends Controller
     }
 
     /**
-     * إنشاء Escrow جديد بين عميل وبزنس
+     * ▶ إنشاء Escrow (client → business)
      */
-    public function create(CreateEscrowRequest $request)
+    public function create(Request $request)
     {
-        $client   = $request->user();
-        $business = User::findOrFail($request->business_id);
+        $request->validate([
+            'business_id'      => 'required|exists:users,id',
+            'client_amount'    => 'required|numeric|min:0',
+            'business_amount'  => 'required|numeric|min:0',
+            'order_id'         => 'nullable|exists:orders,id'
+        ]);
 
         try {
             $escrow = $this->escrow->create(
-                $client,
-                $business,
+                $request->user(),
+                \App\Models\User::find($request->business_id),
                 $request->client_amount,
                 $request->business_amount,
                 $request->order_id
@@ -39,8 +40,8 @@ class EscrowController extends Controller
 
             return response()->json([
                 'status'  => 200,
-                'message' => 'Escrow created successfully',
-                'data'    => $escrow,
+                'message' => 'Escrow created successfully.',
+                'data'    => $escrow
             ]);
 
         } catch (ValidationException $e) {
@@ -48,84 +49,11 @@ class EscrowController extends Controller
                 'status' => 422,
                 'errors' => $e->errors()
             ], 422);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'status'  => 500,
-                'message' => $e->getMessage(),
-            ], 500);
         }
     }
 
-
     /**
-     * تحرير Escrow بعد إتمام عملية خارج التطبيق
-     */
-    public function release($id)
-    {
-        $escrow = Escrow::findOrFail($id);
-
-        try {
-            $updated = $this->escrow->release($escrow);
-
-            return response()->json([
-                'status'  => 200,
-                'message' => 'Escrow released successfully',
-                'data'    => $updated,
-            ]);
-
-        } catch (ValidationException $e) {
-            return response()->json([
-                'status' => 422,
-                'errors' => $e->errors()
-            ], 422);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'status'  => 500,
-                'message' => $e->getMessage(),
-            ], 500);
-        }
-    }
-
-
-    /**
-     * إلغاء Escrow مع تحديد من يحصل على الاسترجاع
-     */
-    public function cancel(CancelEscrowRequest $request, $id)
-    {
-        $escrow = Escrow::findOrFail($id);
-
-        try {
-            $updated = $this->escrow->cancel(
-                $escrow,
-                $request->refund_client,
-                $request->refund_business
-            );
-
-            return response()->json([
-                'status'  => 200,
-                'message' => 'Escrow cancelled successfully',
-                'data'    => $updated,
-            ]);
-
-        } catch (ValidationException $e) {
-            return response()->json([
-                'status' => 422,
-                'errors' => $e->errors()
-            ], 422);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'status'  => 500,
-                'message' => $e->getMessage(),
-            ], 500);
-        }
-    }
-
-
-    /**
-     * عرض تفاصيل Escrow
+     * ▶ عرض Escrow
      */
     public function show($id)
     {
@@ -133,28 +61,95 @@ class EscrowController extends Controller
 
         return response()->json([
             'status'  => 200,
-            'message' => 'Escrow details fetched successfully',
-            'data'    => $escrow,
+            'escrow'  => $escrow,
         ]);
     }
 
-
     /**
-     * عرض جميع Escrows الخاصة بالمستخدم
+     * ▶ عرض عمليات Escrow الخاصة بالمستخدم
      */
     public function myEscrows(Request $request)
     {
         $user = $request->user();
 
         $escrows = Escrow::where('from_user_id', $user->id)
-                        ->orWhere('to_user_id', $user->id)
-                        ->orderBy('id', 'DESC')
-                        ->get();
+            ->orWhere('to_user_id', $user->id)
+            ->latest()
+            ->get();
 
         return response()->json([
             'status'  => 200,
-            'message' => 'Escrows fetched successfully',
-            'data'    => $escrows,
+            'escrows' => $escrows,
         ]);
+    }
+
+    /**
+     * ▶ تحرير الأموال للطرفين (خارج التطبيق)
+     */
+    public function release(Request $request, $id)
+    {
+        $request->validate([
+            'client_amount'   => 'required|numeric|min:0',
+            'business_amount' => 'required|numeric|min:0',
+        ]);
+
+        $escrow = Escrow::findOrFail($id);
+
+        try {
+            $updated = $this->escrow->release(
+                $escrow,
+                $request->client_amount,
+                $request->business_amount
+            );
+
+            return response()->json([
+                'status'  => 200,
+                'message' => 'Escrow released successfully.',
+                'data'    => $updated
+            ]);
+
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => 422,
+                'errors' => $e->errors()
+            ], 422);
+        }
+    }
+
+    /**
+     * ▶ إلغاء Escrow
+     */
+    public function cancel(Request $request, $id)
+    {
+        $request->validate([
+            'refund_client'   => 'required|boolean',
+            'refund_business' => 'required|boolean',
+            'client_amount'   => 'required|numeric|min:0',
+            'business_amount' => 'required|numeric|min:0',
+        ]);
+
+        $escrow = Escrow::findOrFail($id);
+
+        try {
+            $updated = $this->escrow->cancel(
+                $escrow,
+                $request->refund_client,
+                $request->refund_business,
+                $request->client_amount,
+                $request->business_amount
+            );
+
+            return response()->json([
+                'status'  => 200,
+                'message' => 'Escrow cancelled successfully.',
+                'data'    => $updated
+            ]);
+
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => 422,
+                'errors' => $e->errors()
+            ], 422);
+        }
     }
 }

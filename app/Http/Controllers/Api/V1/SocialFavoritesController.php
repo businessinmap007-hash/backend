@@ -7,7 +7,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
 
-class FavoritesController extends Controller
+class SocialFavoritesController extends Controller
 {
 
     /**

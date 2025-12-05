@@ -3,172 +3,152 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\Deposit\CreateDepositRequest;
-use App\Http\Requests\Deposit\ConfirmDepositRequest;
-use App\Http\Requests\Deposit\OutsideBimRequest;
-use App\Http\Resources\EscrowResource;
-use App\Models\Escrow;
+use App\Models\Deposit;
 use App\Models\User;
-use App\Services\EscrowService;
-use App\Services\WalletService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use App\Services\EscrowService;
 
 class DepositController extends Controller
 {
-    protected $wallet;
-    protected $escrow;
+    protected $escrowService;
 
-    public function __construct(WalletService $wallet, EscrowService $escrow)
+    public function __construct(EscrowService $escrowService)
     {
-        $this->wallet  = $wallet;
-        $this->escrow  = $escrow;
+        $this->escrowService = $escrowService;
     }
 
     /**
-     * ============================================================
-     * 1️⃣ إنشاء عملية Deposit / Escrow بين client ↔ business
-     * ============================================================
+     * ▶ إنشاء دفعة مقدمة (Deposit)
      */
-    public function create(CreateDepositRequest $request)
+    public function create(Request $request)
     {
-        $client   = $request->user();
-        $business = User::findOrFail($request->business_id);
-
-        // التأكد أن الطرفين لديهم محفظة
-        $this->wallet->createWalletIfNotExists($client);
-        $this->wallet->createWalletIfNotExists($business);
-
-        // إنشاء escrow فعلي
-        $escrow = $this->escrow->create(
-            $client,
-            $business,
-            $request->client_amount,
-            $request->business_amount,
-            $request->order_id
-        );
-
-        return response()->json([
-            'status'  => 200,
-            'message' => 'Escrow created successfully',
-            'data'    => new EscrowResource($escrow),
+        $request->validate([
+            'business_id'     => 'required|exists:users,id',
+            'client_amount'   => 'required|numeric|min:0.1',
+            'business_amount' => 'required|numeric|min:0',
+            'order_id'        => 'nullable|exists:orders,id'
         ]);
+
+        // المستخدم الحالي = العميل
+        $client = $request->user();
+        $business = User::find($request->business_id);
+
+        try {
+            $escrow = $this->escrowService->create(
+                $client,
+                $business,
+                $request->client_amount,
+                $request->business_amount,
+                $request->order_id
+            );
+
+            return response()->json([
+                'status'  => 200,
+                'message' => 'Deposit (Escrow) created successfully.',
+                'data'    => $escrow
+            ]);
+
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => 422,
+                'errors' => $e->errors(),
+            ], 422);
+        }
     }
 
     /**
-     * ============================================================
-     * 2️⃣ تأكيد العميل للدفع داخل BIM
-     * ============================================================
+     * ▶ العميل يؤكد أنه دفع خارج BIM
      */
-    public function clientConfirm(ConfirmDepositRequest $request, $id)
+    public function clientOutsideBim(Request $request, $id)
     {
-        $escrow = Escrow::findOrFail($id);
-        $user   = $request->user();
+        $escrow = $this->getEscrow($id, $request->user());
 
-        if ($escrow->from_user_id !== $user->id) {
-            return response()->json(['status' => 403, 'message' => 'Unauthorized'], 403);
-        }
-
-        if (! $escrow->client_confirmed) {
-            $escrow->client_confirmed = true;
-            $escrow->save();
-        }
-
-        return response()->json([
-            'status'  => 200,
-            'message' => 'Client confirmed successfully',
-            'data'    => new EscrowResource($escrow),
-        ]);
-    }
-
-    /**
-     * ============================================================
-     * 3️⃣ تأكيد البزنس للدفع داخل BIM
-     * ============================================================
-     */
-    public function businessConfirm(ConfirmDepositRequest $request, $id)
-    {
-        $escrow = Escrow::findOrFail($id);
-        $user   = $request->user();
-
-        if ($escrow->to_user_id !== $user->id) {
-            return response()->json(['status' => 403, 'message' => 'Unauthorized'], 403);
-        }
-
-        if (! $escrow->business_confirmed) {
-            $escrow->business_confirmed = true;
-            $escrow->save();
-        }
-
-        return response()->json([
-            'status'  => 200,
-            'message' => 'Business confirmed successfully',
-            'data'    => new EscrowResource($escrow),
-        ]);
-    }
-
-    /**
-     * ============================================================
-     * 4️⃣ العميل يؤكد الدفع خارج BIM (كاش – تحويل بنك)
-     * ============================================================
-     */
-    public function clientOutsideBim(OutsideBimRequest $request, $id)
-    {
-        $escrow = Escrow::findOrFail($id);
-
-        if ($escrow->from_user_id !== $request->user()->id) {
-            return response()->json(['status' => 403, 'message' => 'Unauthorized'], 403);
-        }
-
-        $escrow->client_outside_bim = true;
+        $escrow->client_paid_outside = true;
         $escrow->save();
 
         return response()->json([
             'status'  => 200,
-            'message' => 'Client marked payment as done outside BIM',
-            'data'    => new EscrowResource($escrow),
+            'message' => 'Client confirmed outside-BIM payment.'
         ]);
     }
 
     /**
-     * ============================================================
-     * 5️⃣ البزنس يؤكد الدفع خارج BIM
-     * ============================================================
+     * ▶ البزنس يؤكد أنه استلم خارج BIM
      */
-    public function businessOutsideBim(OutsideBimRequest $request, $id)
+    public function businessOutsideBim(Request $request, $id)
     {
-        $escrow = Escrow::findOrFail($id);
+        $escrow = $this->getEscrow($id, $request->user());
 
-        if ($escrow->to_user_id !== $request->user()->id) {
-            return response()->json(['status' => 403, 'message' => 'Unauthorized'], 403);
-        }
-
-        $escrow->business_outside_bim = true;
+        $escrow->business_paid_outside = true;
         $escrow->save();
 
         return response()->json([
             'status'  => 200,
-            'message' => 'Business marked payment as done outside BIM',
-            'data'    => new EscrowResource($escrow),
+            'message' => 'Business confirmed outside-BIM payment.'
         ]);
     }
 
     /**
-     * ============================================================
-     * 6️⃣ فتح نزاع Dispute
-     * ============================================================
+     * ▶ العميل يؤكد أن العملية تمت داخل BIM
+     */
+    public function clientConfirm(Request $request, $id)
+    {
+        $escrow = $this->getEscrow($id, $request->user());
+
+        $escrow->client_confirm = true;
+        $escrow->save();
+
+        return response()->json([
+            'status'  => 200,
+            'message' => 'Client confirmed payment.'
+        ]);
+    }
+
+    /**
+     * ▶ البزنس يؤكد أن العملية تمت داخل BIM
+     */
+    public function businessConfirm(Request $request, $id)
+    {
+        $escrow = $this->getEscrow($id, $request->user());
+
+        $escrow->business_confirm = true;
+        $escrow->save();
+
+        return response()->json([
+            'status'  => 200,
+            'message' => 'Business confirmed payment.'
+        ]);
+    }
+
+    /**
+     * ▶ فتح نزاع على العملية
      */
     public function openDispute(Request $request, $id)
     {
-        $escrow = Escrow::findOrFail($id);
+        $escrow = $this->getEscrow($id, $request->user());
 
-        $escrow->status = 'dispute';
+        $escrow->status = 'disputed';
+        $escrow->dispute_reason = $request->reason ?? null;
         $escrow->save();
 
         return response()->json([
             'status'  => 200,
-            'message' => 'Dispute opened successfully',
-            'data'    => new EscrowResource($escrow),
+            'message' => 'Dispute opened successfully.'
         ]);
+    }
+
+    /**
+     * Helper جلب عملية Escrow والتحقق من صلاحية الوصول
+     */
+    protected function getEscrow($id, User $user)
+    {
+        $escrow = \App\Models\Escrow::findOrFail($id);
+
+        if ($escrow->from_user_id !== $user->id && $escrow->to_user_id !== $user->id) {
+            abort(403, 'Access denied.');
+        }
+
+        return $escrow;
     }
 }

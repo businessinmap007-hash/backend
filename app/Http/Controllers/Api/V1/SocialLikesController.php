@@ -8,7 +8,7 @@ use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
 use PhpParser\Node\Expr\Cast\Object_;
 
-class LikesController extends Controller
+class SocialLikesController extends Controller
 {
     /**
      * @param Request $request
