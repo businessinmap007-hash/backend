@@ -2,42 +2,84 @@
 
 namespace App\Providers;
 
-use Illuminate\Cache\RateLimiting\Limit;
-use Illuminate\Foundation\Support\Providers\RouteServiceProvider as ServiceProvider;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Foundation\Support\Providers\RouteServiceProvider as ServiceProvider;
 
 class RouteServiceProvider extends ServiceProvider
 {
     /**
-     * The path to your application's "home" route.
-     *
-     * Typically, users are redirected here after authentication.
-     *
-     * @var string
+     * مسار API الرئيسي
      */
     public const HOME = '/home';
 
     /**
-     * Define your route model bindings, pattern filters, and other route configuration.
+     * Boot
      */
-    public function boot(): void
+    public function boot()
     {
-        RateLimiter::for('api', function (Request $request) {
-            return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
-        });
+        parent::boot();
+    }
 
-        $this->routes(function () {
-            Route::middleware('api')
-                ->prefix('api')
-                ->group(base_path('routes/api.php'));
+    /**
+     * Register Routes
+     */
+    public function map()
+    {
+        $this->mapApiV1Routes();
+        $this->mapApiV2Routes(); // جاهز مستقبلاً
+    }
 
-            Route::middleware('web')
-                ->group(base_path('routes/web.php'));
+    /**
+     * -----------------------------
+     * تحميل API V1
+     * -----------------------------
+     */
+    protected function mapApiV1Routes()
+    {
+        $path = base_path('routes/api/v1');
 
-            Route::middleware('web')
-                ->group(base_path('routes/admin.php'));
-        });
+        Route::prefix('api/v1')
+            ->middleware('api')
+            ->group(function () use ($path) {
+                foreach (scandir($path) as $file) {
+
+                    if ($file === '.' || $file === '..') {
+                        continue;
+                    }
+
+                    if (pathinfo($file, PATHINFO_EXTENSION) === 'php') {
+                        require "$path/$file";
+                    }
+                }
+            });
+    }
+
+    /**
+     * -----------------------------
+     * تحميل API V2 (جاهز للترقية)
+     * -----------------------------
+     */
+    protected function mapApiV2Routes()
+    {
+        $path = base_path('routes/api/v2');
+
+        if (!is_dir($path)) {
+            return; // لا توجد نسخة V2 حتى الآن
+        }
+
+        Route::prefix('api/v2')
+            ->middleware('api')
+            ->group(function () use ($path) {
+                foreach (scandir($path) as $file) {
+
+                    if ($file === '.' || $file === '..') {
+                        continue;
+                    }
+
+                    if (pathinfo($file, PATHINFO_EXTENSION) === 'php') {
+                        require "$path/$file";
+                    }
+                }
+            });
     }
 }
